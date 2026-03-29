@@ -1,0 +1,8 @@
+out/
+dist/
+node_modules/
+.vsix
+*.log
+.DS_Store
+.env
+.env.local

@@ -1,0 +1,99 @@
+{
+  "name": "claude-glm-usage-stats",
+  "displayName": "GLM 用量统计 (GLM Usage Tracker)",
+  "description": "专为使用智谱 GLM Coding Plan 与 Claude Code 打造的自动用量跟踪可视化面板，准确掌握 Token 流水与 MCP 工具配额的侧边栏管家。",
+  "version": "1.0.0",
+  "publisher": "Jorone",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "stats.refresh",
+        "title": "刷新用量数据",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "stats.openSettings",
+        "title": "打开设置",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "stats.showDetail",
+        "title": "显示详细信息"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Claude/GLM 用量统计",
+      "properties": {
+        "stats.claudeApiKey": {
+          "type": "string",
+          "description": "Anthropic Claude API Key",
+          "markdownDescription": "从 https://console.anthropic.com 获取的 API Key"
+        },
+        "stats.glmApiKey": {
+          "type": "string",
+          "description": "智谱 GLM API Key (用于 Claude Code)",
+          "markdownDescription": "从 https://open.bigmodel.cn 获取的 API Key，用于 GLM Coding Plan"
+        },
+        "stats.Claude.maxTokens": {
+          "type": "number",
+          "default": 1000000,
+          "description": "Claude 上下文窗口大小（tokens）"
+        },
+        "stats.glm.maxTokens": {
+          "type": "number",
+          "default": 128000,
+          "description": "GLM 上下文窗口大小（tokens）"
+        },
+        "stats.refreshInterval": {
+          "type": "number",
+          "default": 5,
+          "description": "自动刷新间隔（秒，建议设置比较短以便实时看到本地 Token 增长）",
+          "minimum": 3,
+          "maximum": 3600
+        },
+        "stats.enableAutoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用自动刷新"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.40.0",
+    "typescript": "^5.1.3"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "js-tiktoken": "^1.0.10"
+  },
+  "icon": "resources/iconp.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joroneYao/vscode_glm_usage.git"
+  }
+}

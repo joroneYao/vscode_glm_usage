@@ -722,23 +722,34 @@ export class WebviewManager {
                 setText('apiPlanBadge', (apiQuota.level || 'LITE').toUpperCase());
                 
                 let weeklyResetHtml = '';
-                let dailyResetHtml = '';
                 let quotaHtml = '';
                 let detailsHtml = '';
 
-                // 先提出重置时间
+                // 先提出重置时间（根据 unit 区分周期）
+                // unit: 3=5小时, 4=日, 6=周
+                let fiveHourResetHtml = '';
+                let dailyResetHtml = '';
+                let monthlyResetHtml = '';
                 apiQuota.limits.forEach(limit => {
                     if (limit.type === 'TOKENS_LIMIT' && limit.nextResetTime) {
-                        weeklyResetHtml = '<div style="display:flex; align-items:center; gap:4px;"><span>🔄 周刷新:</span> <span style="color:var(--vscode-editor-foreground);">' + new Date(limit.nextResetTime).toLocaleString('zh-CN', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) + '</span></div>';
+                        const timeStr = new Date(limit.nextResetTime).toLocaleString('zh-CN', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'});
+                        if (limit.unit === 3) {
+                            fiveHourResetHtml = '<div style="display:flex; align-items:center; gap:4px;"><span>🔄 5h刷新:</span> <span style="color:var(--vscode-editor-foreground);">' + timeStr + '</span></div>';
+                        } else if (limit.unit === 4) {
+                            dailyResetHtml = '<div style="display:flex; align-items:center; gap:4px;"><span>🔄 日刷新:</span> <span style="color:var(--vscode-editor-foreground);">' + timeStr + '</span></div>';
+                        } else {
+                            weeklyResetHtml = '<div style="display:flex; align-items:center; gap:4px;"><span>🔄 周刷新:</span> <span style="color:var(--vscode-editor-foreground);">' + timeStr + '</span></div>';
+                        }
                     }
                     if (limit.type === 'TIME_LIMIT' && limit.nextResetTime) {
-                        dailyResetHtml = '<div style="display:flex; align-items:center; gap:4px;"><span>🔄 日刷新:</span> <span style="color:var(--vscode-editor-foreground);">' + new Date(limit.nextResetTime).toLocaleString('zh-CN', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) + '</span></div>';
+                        const timeStr = new Date(limit.nextResetTime).toLocaleString('zh-CN', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'});
+                        monthlyResetHtml = '<div style="display:flex; align-items:center; gap:4px;"><span>📅 到期:</span> <span style="color:var(--vscode-editor-foreground);">' + timeStr + '</span></div>';
                     }
                 });
 
                 const timesEl = document.getElementById('apiRefreshTimes');
                 if (timesEl) {
-                    timesEl.innerHTML = weeklyResetHtml + dailyResetHtml;
+                    timesEl.innerHTML = fiveHourResetHtml + dailyResetHtml + weeklyResetHtml + monthlyResetHtml;
                 }
 
                 apiQuota.limits.forEach(limit => {
@@ -748,6 +759,7 @@ export class WebviewManager {
                     if (limit.type === 'TOKENS_LIMIT') {
                         // 尝试通过 unit 区分长短周期
                         if (limit.unit === 3) title = '每5小时 Token 限额';
+                        if (limit.unit === 4) title = '每日 Token 限额';
                         if (limit.unit === 6) title = '每周 Token 限额';
                     }
                     

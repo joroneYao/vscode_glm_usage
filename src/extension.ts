@@ -8,7 +8,8 @@ let storageService: StorageService;
 let webviewManager: WebviewManager;
 let autoRefreshInterval: NodeJS.Timeout | undefined;
 let statusBarItem: vscode.StatusBarItem;
-let lastCtxPercent: number = 0; // 上下文占比缓存，只升不降
+let lastCtxPercent: number = 0; // 上下文占比缓存，同会话内只升不降
+let lastCtxSessionId: string = ''; // 追踪会话变化
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('Claude/GLM 用量统计插件已激活');
@@ -55,7 +56,13 @@ function updateStatusBarView(stats: any): void {
   const level = (stats.apiQuotaData?.level || stats.planType || '').toLowerCase();
 
   let ctxPercent = Math.min((ctxTokens / ctxTotal) * 100, 100);
-  // 上下文占比只升不降，防止刷新时跳动
+  // 检测会话切换：sessionId 变化时重置缓存
+  const currentSessionId = ctx.sessionId || '';
+  if (currentSessionId && currentSessionId !== lastCtxSessionId) {
+    lastCtxSessionId = currentSessionId;
+    lastCtxPercent = 0;
+  }
+  // 同会话内上下文占比只升不降，防止刷新时跳动
   if (ctxPercent < lastCtxPercent) {
     ctxPercent = lastCtxPercent;
   } else {

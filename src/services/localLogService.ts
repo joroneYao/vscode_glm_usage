@@ -274,53 +274,80 @@ export class LocalLogService {
 
 
 
-  private lastContextCache: { tokens: number; project: string; timestamp: string } | null = null;
+  private lastContextCache: { tokens: number; project: string; timestamp: string; sessionId: string } | null = null;
+  private lastSessionId: string | null = null;
 
   /**
    * 获取最近一次对话的上下文 Token 数
-   * 策略：取 mtime 最新文件中 inputTokens 最大的 entry，
-   * 且只升不降 —— 新值小于缓存值时保持不变，避免多会话并发时跳动
+   * 策略：
+   * 1. 优先使用 birthtime 找最新创建的会话（用户刚切换的新窗口）
+   * 2. 如果会话 ID 变化，清空缓存
+   * 3. 同一会话内只升不降
    */
-  async getCurrentSessionContext(): Promise<{ tokens: number, project: string, timestamp: string } | null> {
+  async getCurrentSessionContext(): Promise<{ tokens: number, project: string, timestamp: string, sessionId: string } | null> {
     try {
       const projectDirs = this.getProjectDirs();
-      let latestFile: string | null = null;
-      let maxMtime = 0;
+
+      // 找到 birthtime 最新的文件（最新创建的会话）
+      let newestFile: string | null = null;
+      let newestBirthtime = 0;
 
       for (const projectDir of projectDirs) {
         const jsonlFiles = this.getJsonlFiles(projectDir);
         for (const file of jsonlFiles) {
           try {
             const stat = fs.statSync(file);
-            if (stat.mtimeMs > maxMtime) {
-              maxMtime = stat.mtimeMs;
-              latestFile = file;
+            const birthtime = stat.birthtimeMs || stat.mtimeMs;
+            if (birthtime > newestBirthtime) {
+              newestBirthtime = birthtime;
+              newestFile = file;
             }
-          } catch (e) {
+          } catch {
             // ignore
           }
         }
       }
 
-      if (!latestFile) return this.lastContextCache;
+      if (!newestFile) {
+        console.log('[GLM-Stats] 未找到任何会话文件');
+        return null;
+      }
 
-      const entries = this.parseJsonlFile(latestFile);
+      const sessionId = path.basename(newestFile, '.jsonl');
+      console.log(`[GLM-Stats] 最新会话: ${sessionId}, birthtime: ${new Date(newestBirthtime).toLocaleString()}`);
+
+      // 检测会话切换：sessionId 变化时清空缓存
+      if (this.lastSessionId !== sessionId) {
+        console.log(`[GLM-Stats] 会话切换: ${this.lastSessionId} -> ${sessionId}`);
+        this.lastSessionId = sessionId;
+        this.lastContextCache = null;
+      }
+
+      const entries = this.parseJsonlFile(newestFile);
+      console.log(`[GLM-Stats] 会话 ${sessionId} 有 ${entries.length} 条记录`);
+
       if (entries.length > 0) {
         const maxEntry = entries.reduce((max, e) => e.inputTokens > max.inputTokens ? e : max, entries[0]);
+        console.log(`[GLM-Stats] 最大 inputTokens: ${maxEntry.inputTokens}`);
 
-        // 只升不降：新值更大时更新缓存，否则返回缓存
+        // 同会话内只升不降：新值更大时更新缓存，否则返回缓存
         if (!this.lastContextCache || maxEntry.inputTokens >= this.lastContextCache.tokens) {
           this.lastContextCache = {
             tokens: maxEntry.inputTokens,
             project: maxEntry.project,
-            timestamp: new Date(maxMtime).toISOString()
+            timestamp: new Date().toISOString(),
+            sessionId
           };
         }
         return this.lastContextCache;
       }
+
+      // 会话还没有数据
+      console.log(`[GLM-Stats] 会话 ${sessionId} 没有数据，返回 null`);
+      return null;
     } catch (error) {
-       console.error('获取当前会话上下文失败:', error);
+      console.error('获取当前会话上下文失败:', error);
     }
-    return this.lastContextCache;
+    return null;
   }
 }

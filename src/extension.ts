@@ -8,6 +8,7 @@ let storageService: StorageService;
 let webviewManager: WebviewManager;
 let autoRefreshInterval: NodeJS.Timeout | undefined;
 let statusBarItem: vscode.StatusBarItem;
+let lastCtxPercent: number = 0; // 上下文占比缓存，只升不降
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('Claude/GLM 用量统计插件已激活');
@@ -51,12 +52,30 @@ function updateStatusBarView(stats: any): void {
   const ctx = stats.localLogData?.chatContext || {};
   const ctxTokens = ctx.tokens || 0;
   const ctxTotal = ctx.maxTokens || 128000;
-  
-  const ctxPercent = Math.min((ctxTokens / ctxTotal) * 100, 100);
+  const level = (stats.apiQuotaData?.level || stats.planType || '').toLowerCase();
+
+  let ctxPercent = Math.min((ctxTokens / ctxTotal) * 100, 100);
+  // 上下文占比只升不降，防止刷新时跳动
+  if (ctxPercent < lastCtxPercent) {
+    ctxPercent = lastCtxPercent;
+  } else {
+    lastCtxPercent = ctxPercent;
+  }
   const progressBar = getVerticalProgressBar(ctxPercent);
-  
-  // 极简显示：图标 + 总量 | 进度条 + 百分比
-  statusBarItem.text = `$(graph) ${formatTokens(todayTokens)} | ${progressBar} ${Math.round(ctxPercent)}%`;
+
+  // 额度显示：MAX(无限额)显示 tokens 数，其他有限额套餐显示用量百分比
+  let usageText: string;
+  if (level === 'max') {
+    usageText = formatTokens(todayTokens);
+  } else {
+    // 从 apiQuotaData.limits 中取 TOKENS_LIMIT 的百分比
+    const tokenLimit = (stats.apiQuotaData?.limits || []).find((l: any) => l.type === 'TOKENS_LIMIT');
+    const quotaPercent = tokenLimit?.percentage
+      ?? (stats.glmUsage?.percentageUsed ? Math.round(stats.glmUsage.percentageUsed * 100) : 0);
+    usageText = quotaPercent + '%';
+  }
+
+  statusBarItem.text = `$(graph) ${usageText} | ${progressBar} ${Math.round(ctxPercent)}%`;
   
   // 如果负荷过大，调整状态栏颜色为警告级别
   if (ctxPercent >= 80) {

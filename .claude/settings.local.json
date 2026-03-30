@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(rtk npm:*)",
+      "mcp__zai-mcp-server__diagnose_error_screenshot",
+      "Read(//e/AISpace/vscode_glm_usage/$HOME/.claude/**)",
+      "Bash(node -e \":*)"
+    ]
+  }
+}

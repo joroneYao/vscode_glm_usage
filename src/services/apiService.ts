@@ -40,6 +40,7 @@ export interface UsageStats {
     totalOutputTokens: number;
     totalCacheCreation: number;
     totalCacheRead: number;
+    todayTokens: number;
     byProject: { project: string; totalTokens: number }[];
     chatContext?: {
       tokens: number;
@@ -367,6 +368,7 @@ export class ApiService {
         totalOutputTokens: allUsage.totalOutputTokens,
         totalCacheCreation: allUsage.totalCacheCreation,
         totalCacheRead: allUsage.totalCacheRead,
+        todayTokens: 0, // 由 getUsageStats 从 cloudTrendData 填充
         byProject: byProject.sort((a, b) => b.totalTokens - a.totalTokens),
         chatContext: currentContext ? {
           ...currentContext,
@@ -437,6 +439,18 @@ export class ApiService {
       percentageUsed = tokensUsed / tokensAvailable;
     }
 
+    // 获取 API 趋势数据
+    const cloudTrendData = apiKey ? (await this.tryUsageTrendApi(apiKey, force)) || undefined : undefined;
+
+    // 从 cloudTrendData 提取今日 tokens
+    if (cloudTrendData?.weekly && localLogData) {
+      const today = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+      const todayEntry = cloudTrendData.weekly.find((d: { date: string; tokens: number; calls: number }) => d.date === todayStr);
+      localLogData.todayTokens = todayEntry?.tokens || 0;
+    }
+
     return {
       hasApiKey: !!apiKey,
       claudeUsage: {
@@ -457,7 +471,7 @@ export class ApiService {
       dataSource,
       localLogData: localLogData || undefined,
       apiQuotaData,
-      cloudTrendData: apiKey ? (await this.tryUsageTrendApi(apiKey, force)) || undefined : undefined
+      cloudTrendData
     };
   }
 

@@ -6,6 +6,7 @@
       "type": "npm",
       "script": "watch",
       "isBackground": true,
+      "problemMatcher": ["$tsc-watch"],
       "presentation": {
         "focus": true,
         "panel": "shared"

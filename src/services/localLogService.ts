@@ -52,6 +52,24 @@ export class LocalLogService {
   }
 
   /**
+   * 判断项目目录名是否为非项目路径（用户主目录、系统目录等）
+   * 直接匹配原始目录名，不依赖 decodeProjectName
+   */
+  private isNonProjectDir(dirName: string): boolean {
+    const lower = dirName.toLowerCase();
+    // 用户主目录: C--Users-xxx（去掉 Downloads 子目录后的用户根目录）
+    if (/^[a-z]--users-[a-z0-9_-]+$/.test(lower)) return true;
+    // Downloads 目录
+    if (/^[a-z]--users-[a-z0-9_-]+-downloads$/.test(lower)) return true;
+    // Windows 系统目录
+    if (/^[a-z]--windows-/.test(lower)) return true;
+    // Linux/macOS 用户主目录
+    if (/^-home-/.test(lower)) return true;
+    if (lower === '-root') return true;
+    return false;
+  }
+
+  /**
    * 获取所有项目目录
    */
   private getProjectDirs(): string[] {
@@ -64,7 +82,7 @@ export class LocalLogService {
       return fs.readdirSync(this.projectsDir)
         .filter(name => {
           const fullPath = path.join(this.projectsDir, name);
-          return fs.statSync(fullPath).isDirectory();
+          return fs.statSync(fullPath).isDirectory() && !this.isNonProjectDir(name);
         })
         .map(name => path.join(this.projectsDir, name));
     } catch (error) {
@@ -150,12 +168,22 @@ export class LocalLogService {
 
   /**
    * 将项目目录名还原为可读路径
-   * 例如: "e--AISpace-MutAgent-Claude" -> "e:/AISpace/MutAgent-Claude"  (近似)
+   * Claude Code 编码规则:
+   *   开头 letter-- → 驱动器号 (C:/)
+   *   中间 -- → 原始连字符 (-)
+   *   单个 - → 路径分隔符 (/)
+   * 注意: 原始路径中的 _ 也被编码为 -，无法区分，属于有损解码
    */
   private decodeProjectName(dirName: string): string {
-    // Claude Code 用 -- 替代 路径分隔符, - 替代其他分隔符
-    // 这是一个近似还原
-    return dirName.replace(/^([a-zA-Z])--/, '$1:/').replace(/--/g, '/');
+    // 1. 驱动器号: "C--" → "C:/"
+    let result = dirName.replace(/^([a-zA-Z])--/, '$1:/');
+    // 2. 中间 "--" → 临时占位符 (保留为原始连字符)
+    result = result.replace(/--/g, '\x00');
+    // 3. 单个 "-" → 路径分隔符 "/"
+    result = result.replace(/-/g, '/');
+    // 4. 还原占位符为 "-"
+    result = result.replace(/\x00/g, '-');
+    return result;
   }
 
   /**
@@ -246,8 +274,12 @@ export class LocalLogService {
 
 
 
+  private lastContextCache: { tokens: number; project: string; timestamp: string } | null = null;
+
   /**
-   * 获取最近一次对话的上下文 Token 数（即最后一个 assistant 消息的 input_tokens）
+   * 获取最近一次对话的上下文 Token 数
+   * 策略：取 mtime 最新文件中 inputTokens 最大的 entry，
+   * 且只升不降 —— 新值小于缓存值时保持不变，避免多会话并发时跳动
    */
   async getCurrentSessionContext(): Promise<{ tokens: number, project: string, timestamp: string } | null> {
     try {
@@ -270,21 +302,25 @@ export class LocalLogService {
         }
       }
 
-      if (!latestFile) return null;
+      if (!latestFile) return this.lastContextCache;
 
       const entries = this.parseJsonlFile(latestFile);
       if (entries.length > 0) {
-        // 最后一条 assistant 消息的 inputTokens 代表了此刻大模型的长上下文长度
-        const lastEntry = entries[entries.length - 1];
-        return {
-          tokens: lastEntry.inputTokens,
-          project: lastEntry.project,
-          timestamp: lastEntry.timestamp
-        };
+        const maxEntry = entries.reduce((max, e) => e.inputTokens > max.inputTokens ? e : max, entries[0]);
+
+        // 只升不降：新值更大时更新缓存，否则返回缓存
+        if (!this.lastContextCache || maxEntry.inputTokens >= this.lastContextCache.tokens) {
+          this.lastContextCache = {
+            tokens: maxEntry.inputTokens,
+            project: maxEntry.project,
+            timestamp: new Date(maxMtime).toISOString()
+          };
+        }
+        return this.lastContextCache;
       }
     } catch (error) {
        console.error('获取当前会话上下文失败:', error);
     }
-    return null;
+    return this.lastContextCache;
   }
 }

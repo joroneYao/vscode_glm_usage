@@ -358,10 +358,34 @@ export class WebviewManager {
         .project-item .name {
             font-size: 12px;
             color: var(--vscode-descriptionForeground);
-            max-width: 60%;
+            flex: 1;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }
+
+        .project-item .copy-btn {
+            font-size: 11px;
+            padding: 1px 6px;
+            border-radius: 3px;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: transparent;
+            color: var(--vscode-descriptionForeground);
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.15s;
+            flex-shrink: 0;
+            margin: 0 6px;
+        }
+
+        .project-item:hover .copy-btn {
+            opacity: 1;
+        }
+
+        .project-item .copy-btn:hover {
+            background: rgba(139, 92, 246, 0.2);
+            border-color: rgba(139, 92, 246, 0.5);
+            color: #a78bfa;
         }
 
         .project-item .tokens {
@@ -527,7 +551,7 @@ export class WebviewManager {
             <!-- Unified Details Grid without internal borders -->
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 32px;">
 
-                <!-- Col 1: Chat Context -->
+                <!-- Col 1: Chat Context (compact) -->
                 <div style="display: flex; flex-direction: column;">
                     <h3 style="font-size: 13px; margin-bottom: 16px; font-weight: 600; color: var(--vscode-editor-foreground); padding-bottom: 8px; border-bottom: 1px dashed rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
                         <span>💬 当前上下文</span>
@@ -799,15 +823,29 @@ export class WebviewManager {
             // Projects
             const projEl = document.getElementById('projectsList');
             projEl.innerHTML = '';
-            const projects = (local.byProject || []).slice(0, 5);
+            const projects = (local.byProject || []).slice(0, 10);
             if (projects.length > 0) {
                 projects.forEach(p => {
                     const div = document.createElement('div');
                     div.className = 'project-item';
-                    const pName = p.project.includes('/') ? p.project.split('/').pop() : 
-                                  (p.project.includes('\\\\') ? p.project.split('\\\\').pop() : p.project);
-                    div.innerHTML = '<span class="name" title="' + p.project + '">' + pName + '</span>'
-                        + '<span class="tokens">' + formatNumber(p.totalTokens) + '</span>';
+                    const nameSpan = document.createElement('span');
+                    nameSpan.className = 'name';
+                    nameSpan.textContent = p.project;
+                    nameSpan.title = p.project;
+                    div.appendChild(nameSpan);
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'copy-btn';
+                    copyBtn.textContent = 'copy';
+                    copyBtn.onclick = () => {
+                        navigator.clipboard.writeText(p.project);
+                        copyBtn.textContent = 'done';
+                        setTimeout(() => { copyBtn.textContent = 'copy'; }, 1500);
+                    };
+                    div.appendChild(copyBtn);
+                    const tokSpan = document.createElement('span');
+                    tokSpan.className = 'tokens';
+                    tokSpan.textContent = formatNumber(p.totalTokens);
+                    div.appendChild(tokSpan);
                     projEl.appendChild(div);
                 });
             } else {

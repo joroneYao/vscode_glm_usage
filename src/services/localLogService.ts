@@ -309,26 +309,21 @@ export class LocalLogService {
       }
 
       if (!newestFile) {
-        console.log('[GLM-Stats] 未找到任何会话文件');
         return null;
       }
 
       const sessionId = path.basename(newestFile, '.jsonl');
-      console.log(`[GLM-Stats] 最新会话: ${sessionId}, birthtime: ${new Date(newestBirthtime).toLocaleString()}`);
 
       // 检测会话切换：sessionId 变化时清空缓存
       if (this.lastSessionId !== sessionId) {
-        console.log(`[GLM-Stats] 会话切换: ${this.lastSessionId} -> ${sessionId}`);
         this.lastSessionId = sessionId;
         this.lastContextCache = null;
       }
 
       const entries = this.parseJsonlFile(newestFile);
-      console.log(`[GLM-Stats] 会话 ${sessionId} 有 ${entries.length} 条记录`);
 
       if (entries.length > 0) {
         const maxEntry = entries.reduce((max, e) => e.inputTokens > max.inputTokens ? e : max, entries[0]);
-        console.log(`[GLM-Stats] 最大 inputTokens: ${maxEntry.inputTokens}`);
 
         // 同会话内只升不降：新值更大时更新缓存，否则返回缓存
         if (!this.lastContextCache || maxEntry.inputTokens >= this.lastContextCache.tokens) {
@@ -343,7 +338,6 @@ export class LocalLogService {
       }
 
       // 会话还没有数据
-      console.log(`[GLM-Stats] 会话 ${sessionId} 没有数据，返回 null`);
       return null;
     } catch (error) {
       console.error('获取当前会话上下文失败:', error);

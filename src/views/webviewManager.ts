@@ -2,10 +2,13 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { StorageService } from '../services/storageService';
 
+const WEBVIEW_VERSION = '1.0.3'; // 与 package.json 保持同步，用于检测版本更新
+
 export class WebviewManager {
     private panel: vscode.WebviewPanel | undefined;
     private context: vscode.ExtensionContext;
     private storageService: StorageService;
+    private currentVersion: string = '';
 
     constructor(context: vscode.ExtensionContext, storageService: StorageService) {
         this.context = context;
@@ -16,12 +19,20 @@ export class WebviewManager {
      * 显示或创建 WebView 面板
      */
     show(): void {
-        if (this.panel) {
+        // ★ 版本更新检测：如果版本变化，强制重新创建 webview
+        if (this.panel && this.currentVersion === WEBVIEW_VERSION) {
             this.panel.reveal(vscode.ViewColumn.Beside);
             this.updatePanel();
             return;
         }
 
+        // 版本变化或面板不存在，重新创建
+        if (this.panel) {
+            this.panel.dispose();
+            this.panel = undefined;
+        }
+
+        this.currentVersion = WEBVIEW_VERSION;
         this.panel = vscode.window.createWebviewPanel(
             'statsDetail',
             'GLM 用量详情',
@@ -39,6 +50,7 @@ export class WebviewManager {
 
         this.panel.onDidDispose(() => {
             this.panel = undefined;
+            this.currentVersion = '';
         });
 
         // 监听来自 WebView 的消息
@@ -54,6 +66,7 @@ export class WebviewManager {
     public updatePanel(): void {
         if (this.panel) {
             const stats = this.storageService.getDashboardStats();
+            console.log(`[WebviewManager] 更新面板数据: todayTokens=${stats.localLogData?.todayTokens || 0}, ctxTokens=${stats.localLogData?.chatContext?.tokens || 0}`);
             this.panel.webview.postMessage({
                 command: 'updateStats',
                 data: stats

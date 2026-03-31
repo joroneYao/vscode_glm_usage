@@ -47,6 +47,7 @@ export interface UsageStats {
       project: string;
       maxTokens: number;
       timestamp: string;
+      sessionId?: string;
     };
   };
   apiQuotaData?: {
@@ -74,6 +75,13 @@ export class ApiService {
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
     this.localLogService = new LocalLogService();
+  }
+
+  /**
+   * 设置当前活跃的会话文件（供文件监听器调用）
+   */
+  setActiveSessionFile(filePath: string): void {
+    this.localLogService.setActiveFile(filePath);
   }
 
   /**
@@ -192,16 +200,16 @@ export class ApiService {
       });
 
       if (response.status === 200 && response.data) {
-        console.log('GLM Billing API 查询/刷新成功');
+        console.log('[ApiService] GLM Billing API 查询/刷新成功');
         this.lastBillingData = response.data;
         this.lastBillingTime = Date.now();
-        
+
         return response.data;
       }
     } catch (error: any) {
       const status = error.response?.status;
       const msg = error.response?.data?.msg || error.message;
-      console.warn(`GLM Billing API 调用失败 (${status}): ${msg}`);
+      console.warn(`[ApiService] GLM Billing API 调用失败 (${status}): ${msg}`);
     }
 
     return null;
@@ -271,10 +279,10 @@ export class ApiService {
       };
       this.lastTrendData = result;
       this.lastTrendTime = Date.now();
-      console.log('GLM model-usage 趋势数据获取成功');
+      console.log('[ApiService] GLM model-usage 趋势数据获取成功');
       return result;
     } catch (err: any) {
-      console.warn('GLM model-usage 趋势获取失败:', err.message);
+      console.warn('[ApiService] GLM model-usage 趋势获取失败:', err.message);
       return null;
     }
   }
@@ -413,13 +421,18 @@ export class ApiService {
             level: parsed.level,
             limits: parsed.rawLimits
           };
-          console.log('使用 Billing API 数据');
+          console.log('[ApiService] 使用 Billing API 数据');
         }
       }
     }
 
     // === 方案 B: 本地项目级解析（仅保留用于上下文与项目统计展示） ===
     const localLogData = await this.getLocalLogUsageData();
+
+    // ★ 关键日志：输出上下文数据详情
+    if (localLogData?.chatContext) {
+      console.log(`[ApiService] 上下文数据: sessionId=${localLogData.chatContext.sessionId?.substring(0,8)}... tokens=${localLogData.chatContext.tokens}`);
+    }
 
     // 生成模型列表
     let models: ModelUsage[] = [];

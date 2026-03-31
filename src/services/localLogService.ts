@@ -276,51 +276,67 @@ export class LocalLogService {
 
   private lastContextCache: { tokens: number; project: string; timestamp: string; sessionId: string } | null = null;
   private lastSessionId: string | null = null;
+  /** 最近活跃的会话文件路径（由文件监听器更新） */
+  private lastActiveFilePath: string | null = null;
+
+  /**
+   * 更新最近活跃的会话文件（供外部文件监听器调用）
+   */
+  setActiveFile(filePath: string): void {
+    this.lastActiveFilePath = filePath;
+    console.log(`[LocalLogService] 设置活跃会话: ${path.basename(filePath || '')}`);
+  }
 
   /**
    * 获取最近一次对话的上下文 Token 数
    * 策略：
-   * 1. 优先使用 birthtime 找最新创建的会话（用户刚切换的新窗口）
-   * 2. 如果会话 ID 变化，清空缓存
-   * 3. 同一会话内只升不降
+   * 1. 优先使用 setActiveFile() 设置的活跃文件（由文件监听器更新）
+   * 2. 如果没有，则回退到 max(birthtime, mtime) 找最近活跃的会话
+   * 3. 如果会话 ID 变化，清空缓存并返回初始状态
+   * 4. 同一会话内只升不降
    */
   async getCurrentSessionContext(): Promise<{ tokens: number, project: string, timestamp: string, sessionId: string } | null> {
     try {
-      const projectDirs = this.getProjectDirs();
+      let activeFile: string | null = this.lastActiveFilePath;
 
-      // 找到 birthtime 最新的文件（最新创建的会话）
-      let newestFile: string | null = null;
-      let newestBirthtime = 0;
+      // 如果没有活跃文件记录，回退到时间戳查找
+      if (!activeFile || !fs.existsSync(activeFile)) {
+        const projectDirs = this.getProjectDirs();
+        let latestActiveTime = 0;
 
-      for (const projectDir of projectDirs) {
-        const jsonlFiles = this.getJsonlFiles(projectDir);
-        for (const file of jsonlFiles) {
-          try {
-            const stat = fs.statSync(file);
-            const birthtime = stat.birthtimeMs || stat.mtimeMs;
-            if (birthtime > newestBirthtime) {
-              newestBirthtime = birthtime;
-              newestFile = file;
+        for (const projectDir of projectDirs) {
+          const jsonlFiles = this.getJsonlFiles(projectDir);
+          for (const file of jsonlFiles) {
+            try {
+              const stat = fs.statSync(file);
+              const activeTime = Math.max(stat.birthtimeMs || 0, stat.mtimeMs || 0);
+              if (activeTime > latestActiveTime) {
+                latestActiveTime = activeTime;
+                activeFile = file;
+              }
+            } catch {
+              // ignore
             }
-          } catch {
-            // ignore
           }
         }
       }
 
-      if (!newestFile) {
+      if (!activeFile) {
+        console.log('[LocalLogService] 未找到任何会话文件');
         return null;
       }
 
-      const sessionId = path.basename(newestFile, '.jsonl');
+      const sessionId = path.basename(activeFile, '.jsonl');
+      const projectName = this.decodeProjectName(path.basename(path.dirname(activeFile)));
 
       // 检测会话切换：sessionId 变化时清空缓存
       if (this.lastSessionId !== sessionId) {
+        console.log(`[LocalLogService] 检测到会话切换: ${this.lastSessionId?.substring(0,8) || '(none)'} -> ${sessionId.substring(0,8)}...`);
         this.lastSessionId = sessionId;
         this.lastContextCache = null;
       }
 
-      const entries = this.parseJsonlFile(newestFile);
+      const entries = this.parseJsonlFile(activeFile);
 
       if (entries.length > 0) {
         const maxEntry = entries.reduce((max, e) => e.inputTokens > max.inputTokens ? e : max, entries[0]);
@@ -333,14 +349,22 @@ export class LocalLogService {
             timestamp: new Date().toISOString(),
             sessionId
           };
+          console.log(`[LocalLogService] 上下文更新: sessionId=${sessionId.substring(0,8)}... tokens=${maxEntry.inputTokens}`);
         }
         return this.lastContextCache;
       }
 
-      // 会话还没有数据
-      return null;
+      // ★ 关键修复：新会话还没有数据时，返回初始上下文（tokens=0）
+      // 这样上层可以正确检测到 sessionId 变化并重置状态
+      console.log(`[LocalLogService] 会话暂无数据，返回初始上下文: sessionId=${sessionId.substring(0,8)}...`);
+      return {
+        tokens: 0,
+        project: projectName,
+        timestamp: new Date().toISOString(),
+        sessionId
+      };
     } catch (error) {
-      console.error('获取当前会话上下文失败:', error);
+      console.error('[LocalLogService] 获取当前会话上下文失败:', error);
     }
     return null;
   }

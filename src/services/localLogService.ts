@@ -137,11 +137,13 @@ export class LocalLogService {
             }
           }
 
-          // ★ 上下文大小 = 新输入 + 缓存读取 + 缓存创建
+          // ★ 上下文大小 = 新输入 + 缓存读取 + 缓存创建 + 输出
+          // output_tokens 代表当前轮正在生成的输出，占用上下文窗口
+          const outputTokens = usage.output_tokens || 0;
           const inputTokens = (usage.input_tokens || 0)
             + (usage.cache_read_input_tokens || 0)
-            + (usage.cache_creation_input_tokens || 0);
-          const outputTokens = usage.output_tokens || 0;
+            + (usage.cache_creation_input_tokens || 0)
+            + outputTokens;
 
           // 跳过空的 usage（中间 streaming 消息）
           if (inputTokens === 0 && outputTokens === 0) {
@@ -196,16 +198,14 @@ export class LocalLogService {
    * @param projectFilter 项目名过滤（可选）
    */
   async getUsage(since?: Date, projectFilter?: string): Promise<AggregatedUsage> {
+    // ★ 如果传入了 projectFilter（编码后的项目目录名），直接限定扫描目录
+    const targetDirs = projectFilter
+      ? [path.join(this.projectsDir, projectFilter)].filter(d => fs.existsSync(d))
+      : this.getProjectDirs();
     const allEntries: LogUsageEntry[] = [];
-    const projectDirs = this.getProjectDirs();
 
-    for (const projectDir of projectDirs) {
+    for (const projectDir of targetDirs) {
       const projectName = path.basename(projectDir);
-
-      // 项目名过滤
-      if (projectFilter && !projectName.toLowerCase().includes(projectFilter.toLowerCase())) {
-        continue;
-      }
 
       const jsonlFiles = this.getJsonlFiles(projectDir);
 
@@ -306,24 +306,40 @@ export class LocalLogService {
    * 获取最近一次对话的上下文 Token 数
    * 策略：
    * 1. 优先使用 setActiveFile() 设置的活跃文件（由文件监听器更新）
-   * 2. 如果没有，则回退到 max(birthtime, mtime) 找最近活跃的会话
+   * 2. 如果没有，则回退到 max(birthtime, mtime) 找最近活跃的会话（限当前工作区）
    * 3. 如果会话 ID 变化，清空缓存并返回初始状态
-   * 4. 同一会话内只升不降
+   * 4. compact 后允许上下文下降
+   *
+   * @param projectFilter 当前工作区的编码后项目目录名，用于隔离多窗口
    */
-  async getCurrentSessionContext(): Promise<{ tokens: number, project: string, timestamp: string, sessionId: string } | null> {
+  async getCurrentSessionContext(projectFilter?: string): Promise<{ tokens: number, project: string, timestamp: string, sessionId: string, compacted?: boolean } | null> {
     try {
       let activeFile: string | null = this.lastActiveFilePath;
 
-      // 如果没有活跃文件记录，回退到时间戳查找
+      // 如果没有活跃文件记录，回退到时间戳查找（限当前工作区目录）
       if (!activeFile || !fs.existsSync(activeFile)) {
         const projectDirs = this.getProjectDirs();
         let latestActiveTime = 0;
+        const now = Date.now();
+        const STALE_THRESHOLD = 5 * 60 * 1000; // 5 分钟内修改过的才算活跃会话
 
         for (const projectDir of projectDirs) {
+          // ★ 工作区过滤：只搜索匹配当前工作区的目录
+          if (projectFilter) {
+            const dirName = path.basename(projectDir);
+            if (dirName !== projectFilter) {
+              continue;
+            }
+          }
+
           const jsonlFiles = this.getJsonlFiles(projectDir);
           for (const file of jsonlFiles) {
             try {
               const stat = fs.statSync(file);
+              // ★ 跳过超过 5 分钟没更新的旧会话文件
+              if (now - stat.mtimeMs > STALE_THRESHOLD) {
+                continue;
+              }
               const activeTime = Math.max(stat.birthtimeMs || 0, stat.mtimeMs || 0);
               if (activeTime > latestActiveTime) {
                 latestActiveTime = activeTime;
@@ -337,7 +353,7 @@ export class LocalLogService {
       }
 
       if (!activeFile) {
-        console.log('[LocalLogService] 未找到任何会话文件');
+        console.log(`[LocalLogService] 未找到会话文件 (projectFilter=${projectFilter || 'none'})`);
         return null;
       }
 
@@ -351,11 +367,20 @@ export class LocalLogService {
         this.lastContextCache = null;
       }
 
-      const entries = this.parseJsonlFile(activeFile);
+      // ★ 解析文件并检测 compact 事件
+      const { entries, lastCompactIndex } = this.parseJsonlFileWithCompact(activeFile);
 
       if (entries.length > 0) {
-        // ★ 取最新一条记录（上下文大小应该是当前实际的值，不是历史最大值）
-        const latestEntry = entries[entries.length - 1];
+        // ★ 如果发生过 compact，只取 compact 之后的数据来判断上下文
+        const effectiveEntries = lastCompactIndex >= 0
+          ? entries.filter((_, i) => i >= lastCompactIndex)
+          : entries;
+
+        const latestEntry = effectiveEntries[effectiveEntries.length - 1];
+
+        // ★ 检测 compact：如果有 compact 记录且当前值明显小于缓存值，标记 compacted
+        const wasCompacted = lastCompactIndex >= 0 && this.lastContextCache &&
+          latestEntry.inputTokens < this.lastContextCache.tokens * 0.5;
 
         this.lastContextCache = {
           tokens: latestEntry.inputTokens,
@@ -363,12 +388,17 @@ export class LocalLogService {
           timestamp: new Date().toISOString(),
           sessionId
         };
+
+        if (wasCompacted) {
+          console.log(`[LocalLogService] 检测到 compact 事件: sessionId=${sessionId.substring(0,8)}... tokens=${latestEntry.inputTokens}`);
+          return { ...this.lastContextCache, compacted: true };
+        }
+
         console.log(`[LocalLogService] 上下文更新: sessionId=${sessionId.substring(0,8)}... tokens=${latestEntry.inputTokens}`);
         return this.lastContextCache;
       }
 
-      // ★ 关键修复：新会话还没有数据时，返回初始上下文（tokens=0）
-      // 这样上层可以正确检测到 sessionId 变化并重置状态
+      // ★ 新会话还没有数据时，返回初始上下文（tokens=0）
       console.log(`[LocalLogService] 会话暂无数据，返回初始上下文: sessionId=${sessionId.substring(0,8)}...`);
       return {
         tokens: 0,
@@ -380,5 +410,70 @@ export class LocalLogService {
       console.error('[LocalLogService] 获取当前会话上下文失败:', error);
     }
     return null;
+  }
+
+  /**
+   * 解析 JSONL 文件并检测 compact 事件
+   * compact 后会生成 type="summary" 的消息，表示上下文被压缩
+   */
+  private parseJsonlFileWithCompact(filePath: string): { entries: LogUsageEntry[], lastCompactIndex: number } {
+    const entries: LogUsageEntry[] = [];
+    const projectName = path.basename(path.dirname(filePath));
+    const sessionId = path.basename(filePath, '.jsonl');
+    let lastCompactIndex = -1;
+
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          const data = JSON.parse(lines[i]);
+
+          // ★ 检测 compact/summary 事件
+          if (data.type === 'summary' || (data.type === 'system' && data.subtype === 'summary')) {
+            lastCompactIndex = i;
+            continue;
+          }
+
+          // 只处理 assistant 类型的消息（包含 usage 数据）
+          if (data.type !== 'assistant' || !data.message?.usage) {
+            continue;
+          }
+
+          const usage = data.message.usage;
+          const timestamp = data.timestamp;
+
+          // ★ 上下文大小 = 新输入 + 缓存读取 + 缓存创建 + 输出
+          const outputTokens = usage.output_tokens || 0;
+          const inputTokens = (usage.input_tokens || 0)
+            + (usage.cache_read_input_tokens || 0)
+            + (usage.cache_creation_input_tokens || 0)
+            + outputTokens;
+
+          // 跳过空的 usage
+          if (inputTokens === 0 && outputTokens === 0) {
+            continue;
+          }
+
+          entries.push({
+            sessionId,
+            model: data.message.model || 'unknown',
+            inputTokens,
+            outputTokens,
+            cacheCreationInputTokens: usage.cache_creation_input_tokens || 0,
+            cacheReadInputTokens: usage.cache_read_input_tokens || 0,
+            timestamp: timestamp || '',
+            project: this.decodeProjectName(projectName)
+          });
+        } catch {
+          continue;
+        }
+      }
+    } catch (error) {
+      console.error('解析 JSONL 文件失败:', filePath, error);
+    }
+
+    return { entries, lastCompactIndex };
   }
 }

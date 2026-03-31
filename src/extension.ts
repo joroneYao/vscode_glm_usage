@@ -15,7 +15,7 @@ let statusBarItem: vscode.StatusBarItem;
 let lastCtxPercent: number = 0; // 上下文占比缓存，同会话内只升不降
 let lastCtxSessionId: string = ''; // 追踪会话变化
 let refreshDebounceTimer: NodeJS.Timeout | undefined; // 防抖定时器
-const EXTENSION_VERSION = '1.0.3'; // 与 package.json 保持同步
+const EXTENSION_VERSION = '1.0.5'; // 与 package.json 保持同步
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24小时检查一次更新
 
 /**
@@ -70,6 +70,17 @@ export async function activate(context: vscode.ExtensionContext) {
   storageService = new StorageService(context);
   apiService = new ApiService(context);
   webviewManager = new WebviewManager(context, storageService);
+
+  // ★ 设置当前工作区过滤（隔离多窗口数据）
+  apiService.setProjectFilter(vscode.workspace.workspaceFolders);
+
+  // ★ 监听工作区变化，更新过滤
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      apiService.setProjectFilter(vscode.workspace.workspaceFolders);
+      apiService.clearSessionContextCache();
+    })
+  );
 
   // 创建状态栏项目
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -130,6 +141,12 @@ function updateStatusBarView(stats: any): void {
     console.log(`[StatusBar] 检测到会话切换: ${lastCtxSessionId.substring(0,8)}... -> ${currentSessionId.substring(0,8)}...`);
     lastCtxSessionId = currentSessionId;
     lastCtxPercent = 0; // 新会话归零
+  }
+
+  // ★ 检测 compact 事件：上下文被压缩后允许下降
+  if (ctx.compacted) {
+    console.log(`[StatusBar] 检测到 compact，重置上下文百分比`);
+    lastCtxPercent = 0;
   }
 
   let ctxPercent = Math.min((ctxTokens / ctxTotal) * 100, 100);
@@ -198,6 +215,7 @@ function registerCommands(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('stats.refresh', async () => {
       try {
         vscode.window.showInformationMessage('正在刷新用量数据...');
+        apiService.clearSessionContextCache(); // 清空上下文缓存，强制重新读取
         const freshStats = await apiService.getUsageStats(true); // force=true 强制突破 30s 缓存
         await storageService.saveUsageStats(freshStats);
         vscode.window.showInformationMessage('✅ 用量数据已刷新');
@@ -300,18 +318,16 @@ function setupFileWatcher(context: vscode.ExtensionContext) {
 
   /**
    * 将路径编码为 Claude 项目目录名格式
-   * Claude Code 编码规则: C:/path/to/project -> C--path-to-project
+   * 编码规则: 驱动器号小写+--, 路径保持原大小写, /和_都变为-
+   * 例: E:\AISpace\github\vscode_glm_usage → e--AISpace-github-vscode-glm-usage
    */
   const encodeToProjectDirName = (projectPath: string): string => {
-    // Windows: C:\path\to -> C--path-to
-    // Unix: /home/user/project -> -home-user-project
     let normalized = projectPath.replace(/\\/g, '/');
-    // 移除末尾斜杠
     normalized = normalized.replace(/\/+$/, '');
-    // 驱动器号: C:/ -> C--
-    normalized = normalized.replace(/^([a-zA-Z]):\//, '$1--');
-    // 路径分隔符: / -> -
-    normalized = normalized.replace(/\//g, '-');
+    // 驱动器号小写: E:/ → e--
+    normalized = normalized.replace(/^([A-Za-z]):\//, (_, c) => c.toLowerCase() + '--');
+    // 路径分隔符和下划线: / _ → -
+    normalized = normalized.replace(/[_\/]/g, '-');
     return normalized;
   };
 

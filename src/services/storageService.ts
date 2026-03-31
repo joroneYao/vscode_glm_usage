@@ -47,22 +47,22 @@ export class StorageService {
   }
 
   /**
-   * 保存使用统计数据
+   * 保存使用统计数据（存到 workspaceState，每个窗口/工作区独立）
    */
   async saveUsageStats(stats: any): Promise<void> {
     const snapshot = {
       ...stats,
       lastUpdated: Date.now()
     };
-    await this.saveGlobalData('usageStats', snapshot);
+    await this.saveWorkspaceData('usageStats', snapshot);
     await this.appendUsageHistory(snapshot);
   }
 
   /**
-   * 获取使用统计数据
+   * 获取使用统计数据（从 workspaceState 读取，每个窗口/工作区独立）
    */
   getUsageStats(): any {
-    return this.getGlobalData('usageStats') || {
+    return this.getWorkspaceData('usageStats') || {
       claudeUsage: { tokensUsed: 0, tokensAvailable: 128000, percentageUsed: 0 },
       lastUpdated: 0
     };

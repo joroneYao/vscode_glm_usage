@@ -48,6 +48,7 @@ export interface UsageStats {
       maxTokens: number;
       timestamp: string;
       sessionId?: string;
+      compacted?: boolean;
     };
   };
   apiQuotaData?: {
@@ -71,10 +72,33 @@ export class ApiService {
   private lastBillingTime: number = 0;
   private lastTrendData: any = null;
   private lastTrendTime: number = 0;
+  /** 当前工作区编码后的项目目录名，用于隔离多窗口数据 */
+  private projectFilter: string | null = null;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
     this.localLogService = new LocalLogService();
+  }
+
+  /**
+   * 设置当前工作区过滤（每个 VSCode 窗口在激活时调用）
+   * 编码规则必须与 Claude Code 一致: 驱动器号小写+--, 路径保持原大小写, /和_都变为-
+   * 例: E:\AISpace\github\vscode_glm_usage → e--AISpace-github-vscode-glm-usage
+   */
+  setProjectFilter(workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined): void {
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+      this.projectFilter = null;
+      return;
+    }
+    const folder = workspaceFolders[0].uri.fsPath;
+    let normalized = folder.replace(/\\/g, '/');
+    normalized = normalized.replace(/\/+$/, '');
+    // 驱动器号小写: E:/ → e--
+    normalized = normalized.replace(/^([A-Za-z]):\//, (_, c) => c.toLowerCase() + '--');
+    // 路径分隔符和下划线 → -
+    normalized = normalized.replace(/[_\/]/g, '-');
+    this.projectFilter = normalized;
+    console.log(`[ApiService] 设置项目过滤: ${this.projectFilter}`);
   }
 
   /**
@@ -369,8 +393,8 @@ export class ApiService {
 
     try {
       const [allUsage, currentContext] = await Promise.all([
-        this.localLogService.getUsage(),
-        this.localLogService.getCurrentSessionContext()
+        this.localLogService.getUsage(undefined, this.projectFilter || undefined),
+        this.localLogService.getCurrentSessionContext(this.projectFilter || undefined)
       ]);
 
       const byProject: any[] = [];

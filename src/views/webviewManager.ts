@@ -904,10 +904,8 @@ export class WebviewManager {
             }
 
             // Chat Context
-            // Chat Context
             const ctxTokensCount = ctx.tokens || 0;
-            const config = vscode.workspace.getConfiguration('stats');
-            const ctxMaxTokens = ctx.maxTokens || config.get<number>('glm.maxTokens', 200000);
+            const ctxMaxTokens = ctx.maxTokens || 200000;
             const ctxPct = Math.min((ctxTokensCount / ctxMaxTokens) * 100, 100);
             
             if (ctx.project) {

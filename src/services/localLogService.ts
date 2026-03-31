@@ -137,9 +137,13 @@ export class LocalLogService {
             }
           }
 
-          // 跳过空的 usage（中间 streaming 消息）
-          const inputTokens = usage.input_tokens || 0;
+          // ★ 上下文大小 = 新输入 + 缓存读取 + 缓存创建
+          const inputTokens = (usage.input_tokens || 0)
+            + (usage.cache_read_input_tokens || 0)
+            + (usage.cache_creation_input_tokens || 0);
           const outputTokens = usage.output_tokens || 0;
+
+          // 跳过空的 usage（中间 streaming 消息）
           if (inputTokens === 0 && outputTokens === 0) {
             continue;
           }
@@ -288,6 +292,17 @@ export class LocalLogService {
   }
 
   /**
+   * 清空上下文缓存（供外部调用，强制重新读取文件）
+   * 注意：不清空 lastActiveFilePath，保持当前追踪的会话
+   */
+  clearContextCache(): void {
+    this.lastContextCache = null;
+    this.lastSessionId = null;
+    // ★ 不清空 lastActiveFilePath，保持当前追踪的会话
+    console.log('[LocalLogService] 上下文缓存已清空（保持活跃文件）');
+  }
+
+  /**
    * 获取最近一次对话的上下文 Token 数
    * 策略：
    * 1. 优先使用 setActiveFile() 设置的活跃文件（由文件监听器更新）
@@ -339,18 +354,16 @@ export class LocalLogService {
       const entries = this.parseJsonlFile(activeFile);
 
       if (entries.length > 0) {
-        const maxEntry = entries.reduce((max, e) => e.inputTokens > max.inputTokens ? e : max, entries[0]);
+        // ★ 取最新一条记录（上下文大小应该是当前实际的值，不是历史最大值）
+        const latestEntry = entries[entries.length - 1];
 
-        // 同会话内只升不降：新值更大时更新缓存，否则返回缓存
-        if (!this.lastContextCache || maxEntry.inputTokens >= this.lastContextCache.tokens) {
-          this.lastContextCache = {
-            tokens: maxEntry.inputTokens,
-            project: maxEntry.project,
-            timestamp: new Date().toISOString(),
-            sessionId
-          };
-          console.log(`[LocalLogService] 上下文更新: sessionId=${sessionId.substring(0,8)}... tokens=${maxEntry.inputTokens}`);
-        }
+        this.lastContextCache = {
+          tokens: latestEntry.inputTokens,
+          project: latestEntry.project,
+          timestamp: new Date().toISOString(),
+          sessionId
+        };
+        console.log(`[LocalLogService] 上下文更新: sessionId=${sessionId.substring(0,8)}... tokens=${latestEntry.inputTokens}`);
         return this.lastContextCache;
       }
 

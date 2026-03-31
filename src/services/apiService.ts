@@ -85,6 +85,13 @@ export class ApiService {
   }
 
   /**
+   * 清空会话上下文缓存（强制重新查找最新会话）
+   */
+  clearSessionContextCache(): void {
+    this.localLogService.clearContextCache();
+  }
+
+  /**
    * 获取 Claude Code 配置目录路径（通用化）
    */
   private getClaudeConfigPath(): string {
@@ -371,6 +378,10 @@ export class ApiService {
         byProject.push({ project, totalTokens: data.totalTokens });
       });
 
+      // 从 VS Code 配置读取上下文窗口大小
+      const config = vscode.workspace.getConfiguration('stats');
+      const maxTokens = config.get<number>('glm.maxTokens', 200000);
+
       return {
         totalInputTokens: allUsage.totalInputTokens,
         totalOutputTokens: allUsage.totalOutputTokens,
@@ -380,7 +391,7 @@ export class ApiService {
         byProject: byProject.sort((a, b) => b.totalTokens - a.totalTokens),
         chatContext: currentContext ? {
           ...currentContext,
-          maxTokens: 128000 // GLM-4 default limit
+          maxTokens
         } : undefined
       };
     } catch (error) {

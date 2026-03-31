@@ -20,7 +20,7 @@
 | `stats.glmApiKey` | 智谱 GLM API Key（优先检查系统 `~/.claude/settings.json`，若无则使用此项） | `""` |
 | `stats.claudeApiKey` | （针对海外 Claude 原生直连用户） | `""` |
 | `stats.refreshInterval` | 自动刷新间隔（秒），建议设置为 3~5 秒实现流式统计 | `5` |
-| `stats.glm.maxTokens` | 判定告警的最大上下文长度（智谱 GLM-4 默认 128k） | `128000` |
+| `stats.glm.maxTokens` | 判定告警的最大上下文长度（智谱 GLM-5 codingplan 200K） | `200000` |
 
 ## 🛡️ 数据与安全隐私
 

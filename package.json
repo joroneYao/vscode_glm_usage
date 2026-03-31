@@ -53,7 +53,7 @@
         },
         "stats.glm.maxTokens": {
           "type": "number",
-          "default": 128000,
+          "default": 200000,
           "description": "GLM 上下文窗口大小（tokens）"
         },
         "stats.refreshInterval": {
@@ -91,7 +91,7 @@
     "axios": "^1.6.0",
     "js-tiktoken": "^1.0.10"
   },
-  "icon": "resources/icon2.jpg",
+  "icon": "resources/icon2.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/joroneYao/vscode_glm_usage.git"

@@ -315,6 +315,16 @@ export class LocalLogService {
   async getCurrentSessionContext(projectFilter?: string): Promise<{ tokens: number, project: string, timestamp: string, sessionId: string, compacted?: boolean } | null> {
     try {
       let activeFile: string | null = this.lastActiveFilePath;
+      console.log(`[LocalLogService] getCurrentSessionContext 开始: projectFilter=${projectFilter || 'none'}, lastActiveFilePath=${activeFile ? path.basename(path.dirname(activeFile)) + '/' + path.basename(activeFile) : 'none'}`);
+
+      // ★ 如果设置了工作区过滤，检查 activeFile 是否属于当前工作区
+      if (activeFile && projectFilter) {
+        const fileProjectDir = path.basename(path.dirname(activeFile));
+        if (fileProjectDir !== projectFilter) {
+          console.log(`[LocalLogService] 活跃文件不属于当前工作区，跳过: ${fileProjectDir} !== ${projectFilter}`);
+          activeFile = null;  // 重置为 null，触发回退查找
+        }
+      }
 
       // 如果没有活跃文件记录，回退到时间戳查找（限当前工作区目录）
       if (!activeFile || !fs.existsSync(activeFile)) {

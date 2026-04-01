@@ -2,13 +2,15 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { StorageService } from '../services/storageService';
 
-const WEBVIEW_VERSION = '1.0.3'; // 与 package.json 保持同步，用于检测版本更新
+const WEBVIEW_VERSION = '1.0.7'; // 与 package.json 保持同步，用于检测版本更新
 
 export class WebviewManager {
     private panel: vscode.WebviewPanel | undefined;
     private context: vscode.ExtensionContext;
     private storageService: StorageService;
     private currentVersion: string = '';
+    private lastCtxPercent: number = 0; // 上下文占比缓存，同会话内只升不降
+    private lastCtxSessionId: string = ''; // 追踪会话变化
 
     constructor(context: vscode.ExtensionContext, storageService: StorageService) {
         this.context = context;
@@ -66,10 +68,44 @@ export class WebviewManager {
     public updatePanel(): void {
         if (this.panel) {
             const stats = this.storageService.getDashboardStats();
-            console.log(`[WebviewManager] 更新面板数据: todayTokens=${stats.localLogData?.todayTokens || 0}, ctxTokens=${stats.localLogData?.chatContext?.tokens || 0}`);
+            const ctx = stats.localLogData?.chatContext || {};
+            const ctxTokens = ctx.tokens || 0;
+            const config = vscode.workspace.getConfiguration('stats');
+            const ctxTotal = ctx.maxTokens || config.get<number>('glm.maxTokens', 200000);
+            const currentSessionId = ctx.sessionId || '';
+
+            // ★ 检测会话切换
+            if (currentSessionId && currentSessionId !== this.lastCtxSessionId) {
+                console.log(`[WebviewManager] 会话切换: ${this.lastCtxSessionId.substring(0,8)}... -> ${currentSessionId.substring(0,8)}...`);
+                this.lastCtxSessionId = currentSessionId;
+                this.lastCtxPercent = 0;
+            }
+
+            // ★ 检测 compact 事件
+            if (ctx.compacted) {
+                console.log(`[WebviewManager] 检测到 compact，重置上下文百分比`);
+                this.lastCtxPercent = 0;
+            }
+
+            let ctxPercent = Math.min((ctxTokens / ctxTotal) * 100, 100);
+
+            // ★ 同会话内只升不降
+            if (ctxPercent < this.lastCtxPercent) {
+                ctxPercent = this.lastCtxPercent;
+            } else if (ctxPercent > this.lastCtxPercent) {
+                this.lastCtxPercent = ctxPercent;
+            }
+
+            console.log(`[WebviewManager] 更新面板: todayTokens=${stats.localLogData?.todayTokens || 0}, ctxTokens=${ctxTokens}, ctxPercent=${ctxPercent.toFixed(1)}%`);
+
             this.panel.webview.postMessage({
                 command: 'updateStats',
-                data: stats
+                data: {
+                    ...stats,
+                    ctxPercent,  // 传递计算好的上下文百分比
+                    ctxTokens,   // 传递上下文 tokens
+                    ctxTotal     // 传递上下文总量
+                }
             });
         }
     }
@@ -571,7 +607,7 @@ export class WebviewManager {
                         <span id="ctxProjectBadge" style="display: none; font-size: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); padding: 2px 6px; border-radius: 4px;"></span>
                     </h3>
                     <div id="ctxWarningBanner" style="display: none; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 6px; margin-bottom: 8px; font-size: 11px; color: #ef4444; align-items: flex-start; gap: 4px;">
-                        <span>⚠️</span> <div>建议清理历史</div>
+                        <span>⚠️</span> <div>建议新开会话继续</div>
                     </div>
                     <div style="margin-top: 16px; display: flex; flex-direction: column; align-items: center;">
                         <div style="font-size: 32px; font-weight: 700; color: var(--vscode-editor-foreground); line-height: 1; margin-bottom: 14px;" id="ctxPercentStr">0%</div>
@@ -903,11 +939,11 @@ export class WebviewManager {
                 cloudSec.style.display = 'none';
             }
 
-            // Chat Context
-            const ctxTokensCount = ctx.tokens || 0;
-            const ctxMaxTokens = ctx.maxTokens || 200000;
-            const ctxPct = Math.min((ctxTokensCount / ctxMaxTokens) * 100, 100);
-            
+            // Chat Context - 优先使用后端计算好的值
+            const ctxTokensCount = data.ctxTokens ?? (ctx.tokens || 0);
+            const ctxMaxTokens = data.ctxTotal ?? (ctx.maxTokens || 200000);
+            const ctxPct = data.ctxPercent ?? Math.min((ctxTokensCount / ctxMaxTokens) * 100, 100);
+
             if (ctx.project) {
                 document.getElementById('ctxProjectBadge').style.display = 'inline-block';
                 const ctxProjName = ctx.project.includes('/') ? ctx.project.split('/').pop() : 

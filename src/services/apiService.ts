@@ -84,14 +84,29 @@ export class ApiService {
    * 设置当前工作区过滤（每个 VSCode 窗口在激活时调用）
    * 编码规则必须与 Claude Code 一致: 驱动器号小写+--, 路径保持原大小写, /和_都变为-
    * 例: E:\AISpace\github\vscode_glm_usage → e--AISpace-github-vscode-glm-usage
+   * @param workspaceFolders 工作区文件夹列表
+   * @param fallbackPath 回退路径（F5 调试场景下使用扩展路径）
    */
-  setProjectFilter(workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined): void {
-    if (!workspaceFolders || workspaceFolders.length === 0) {
+  setProjectFilter(workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined, fallbackPath?: string): void {
+    console.log(`[ApiService] setProjectFilter 被调用, workspaceFolders=${workspaceFolders ? workspaceFolders.length : 'undefined'}, fallbackPath=${fallbackPath || 'none'}`);
+
+    let folderPath: string | undefined;
+
+    if (workspaceFolders && workspaceFolders.length > 0) {
+      folderPath = workspaceFolders[0].uri.fsPath;
+      console.log(`[ApiService] 使用工作区路径: ${folderPath}`);
+    } else if (fallbackPath) {
+      folderPath = fallbackPath;
+      console.log(`[ApiService] 使用回退路径(扩展路径): ${folderPath}`);
+    }
+
+    if (!folderPath) {
       this.projectFilter = null;
+      console.log(`[ApiService] projectFilter 设置为 null (无工作区且无回退)`);
       return;
     }
-    const folder = workspaceFolders[0].uri.fsPath;
-    let normalized = folder.replace(/\\/g, '/');
+
+    let normalized = folderPath.replace(/\\/g, '/');
     normalized = normalized.replace(/\/+$/, '');
     // 驱动器号小写: E:/ → e--
     normalized = normalized.replace(/^([A-Za-z]):\//, (_, c) => c.toLowerCase() + '--');

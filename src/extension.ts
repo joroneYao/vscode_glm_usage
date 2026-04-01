@@ -15,7 +15,7 @@ let statusBarItem: vscode.StatusBarItem;
 let lastCtxPercent: number = 0; // 上下文占比缓存，同会话内只升不降
 let lastCtxSessionId: string = ''; // 追踪会话变化
 let refreshDebounceTimer: NodeJS.Timeout | undefined; // 防抖定时器
-const EXTENSION_VERSION = '1.0.5'; // 与 package.json 保持同步
+const EXTENSION_VERSION = '1.0.7'; // 与 package.json 保持同步
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24小时检查一次更新
 
 /**
@@ -72,12 +72,13 @@ export async function activate(context: vscode.ExtensionContext) {
   webviewManager = new WebviewManager(context, storageService);
 
   // ★ 设置当前工作区过滤（隔离多窗口数据）
-  apiService.setProjectFilter(vscode.workspace.workspaceFolders);
+  // 如果没有工作区，使用扩展路径作为回退（F5 调试场景）
+  apiService.setProjectFilter(vscode.workspace.workspaceFolders, context.extensionPath);
 
   // ★ 监听工作区变化，更新过滤
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
-      apiService.setProjectFilter(vscode.workspace.workspaceFolders);
+      apiService.setProjectFilter(vscode.workspace.workspaceFolders, context.extensionPath);
       apiService.clearSessionContextCache();
     })
   );
@@ -336,27 +337,41 @@ function setupFileWatcher(context: vscode.ExtensionContext) {
    */
   const isFileInCurrentWorkspace = (filePath: string): boolean => {
     const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-      // 没有打开工作区时，不过滤
-      return true;
+
+    // 确定要匹配的项目路径：优先使用工作区，否则使用扩展路径（F5 调试场景）
+    let projectPaths: string[] = [];
+    if (workspaceFolders && workspaceFolders.length > 0) {
+      projectPaths = workspaceFolders.map(f => f.uri.fsPath);
+    } else if (context.extensionPath) {
+      // F5 调试场景：使用扩展路径作为回退
+      projectPaths = [context.extensionPath];
+      console.log(`[Extension] 无工作区，使用扩展路径作为回退: ${context.extensionPath}`);
+    }
+
+    if (projectPaths.length === 0) {
+      console.log(`[Extension] 无法确定项目路径，忽略文件变化`);
+      return false;
     }
 
     // 从文件路径提取项目目录名
-    // filePath: ~/.claude/projects/C--path-to-project/sessionId.jsonl
+    // filePath: ~/.claude/projects/e--AISpace-vscode-glm-usage/sessionId.jsonl
     const match = filePath.match(/\.claude[\\\/]projects[\\\/]([^\\\/]+)[\\\/]/);
     if (!match) {
-      return true; // 无法解析，不过滤
+      console.log(`[Extension] 无法解析文件路径: ${filePath}`);
+      return false;
     }
     const fileProjectDir = match[1];
 
-    // 检查是否有任一工作区匹配
-    for (const folder of workspaceFolders) {
-      const workspaceProjectDir = encodeToProjectDirName(folder.uri.fsPath);
+    // 检查是否有任一项目路径匹配
+    for (const projectPath of projectPaths) {
+      const workspaceProjectDir = encodeToProjectDirName(projectPath);
+      console.log(`[Extension] 匹配检查: fileDir=${fileProjectDir}, projectDir=${workspaceProjectDir}`);
       if (fileProjectDir === workspaceProjectDir) {
         return true;
       }
     }
 
+    console.log(`[Extension] 文件不匹配任何项目，将被过滤`);
     return false;
   };
 

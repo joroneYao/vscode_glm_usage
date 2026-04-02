@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as readline from 'readline';
+import { logger } from './logService';
 
 /**
  * 单条对话的 usage 数据
@@ -75,7 +76,7 @@ export class LocalLogService {
   private getProjectDirs(): string[] {
     try {
       if (!fs.existsSync(this.projectsDir)) {
-        console.warn('Claude projects 目录不存在:', this.projectsDir);
+        logger.warn('Claude projects 目录不存在:', this.projectsDir);
         return [];
       }
 
@@ -86,7 +87,7 @@ export class LocalLogService {
         })
         .map(name => path.join(this.projectsDir, name));
     } catch (error) {
-      console.error('读取 projects 目录失败:', error);
+      logger.error('读取 projects 目录失败:', error);
       return [];
     }
   }
@@ -97,10 +98,10 @@ export class LocalLogService {
   private getJsonlFiles(dir: string): string[] {
     try {
       return fs.readdirSync(dir)
-        .filter(name => name.endsWith('.jsonl'))
+        .filter(name => name.toLowerCase().endsWith('.jsonl'))
         .map(name => path.join(dir, name));
     } catch (error) {
-      console.error('读取 JSONL 文件列表失败:', error);
+      logger.error('读取 JSONL 文件列表失败:', error);
       return [];
     }
   }
@@ -166,7 +167,7 @@ export class LocalLogService {
         }
       }
     } catch (error) {
-      console.error('解析 JSONL 文件失败:', filePath, error);
+      logger.error('解析 JSONL 文件失败:', filePath, error);
     }
 
     return entries;
@@ -288,7 +289,7 @@ export class LocalLogService {
    */
   setActiveFile(filePath: string): void {
     this.lastActiveFilePath = filePath;
-    console.log(`[LocalLogService] 设置活跃会话: ${path.basename(filePath || '')}`);
+    logger.log('[LocalLogService] 设置活跃会话:', path.basename(filePath || ''));
   }
 
   /**
@@ -299,7 +300,7 @@ export class LocalLogService {
     this.lastContextCache = null;
     this.lastSessionId = null;
     // ★ 不清空 lastActiveFilePath，保持当前追踪的会话
-    console.log('[LocalLogService] 上下文缓存已清空（保持活跃文件）');
+    logger.log('[LocalLogService] 上下文缓存已清空（保持活跃文件）');
   }
 
   /**
@@ -315,20 +316,26 @@ export class LocalLogService {
   async getCurrentSessionContext(projectFilter?: string): Promise<{ tokens: number, project: string, timestamp: string, sessionId: string, compacted?: boolean } | null> {
     try {
       let activeFile: string | null = this.lastActiveFilePath;
-      console.log(`[LocalLogService] getCurrentSessionContext 开始: projectFilter=${projectFilter || 'none'}, lastActiveFilePath=${activeFile ? path.basename(path.dirname(activeFile)) + '/' + path.basename(activeFile) : 'none'}`);
+      logger.log('[LocalLogService] getCurrentSessionContext 开始:', {
+        projectFilter: projectFilter || 'none',
+        lastActiveFilePath: activeFile ? path.basename(path.dirname(activeFile)) + '/' + path.basename(activeFile) : 'none'
+      });
 
       // ★ 如果设置了工作区过滤，检查 activeFile 是否属于当前工作区
       if (activeFile && projectFilter) {
         const fileProjectDir = path.basename(path.dirname(activeFile));
-        if (fileProjectDir !== projectFilter) {
-          console.log(`[LocalLogService] 活跃文件不属于当前工作区，跳过: ${fileProjectDir} !== ${projectFilter}`);
+        if (fileProjectDir.toLowerCase() !== projectFilter.toLowerCase()) {
+          logger.log('[LocalLogService] 活跃文件不属于当前工作区，跳过:', fileProjectDir, '!==', projectFilter);
           activeFile = null;  // 重置为 null，触发回退查找
         }
       }
 
       // 如果没有活跃文件记录，回退到时间戳查找（限当前工作区目录）
       if (!activeFile || !fs.existsSync(activeFile)) {
+        logger.log('[LocalLogService] 进入回退查找模式...');
         const projectDirs = this.getProjectDirs();
+        logger.log('[LocalLogService] 找到项目目录数:', projectDirs.length);
+
         let latestActiveTime = 0;
         const now = Date.now();
         const STALE_THRESHOLD = 5 * 60 * 1000; // 5 分钟内修改过的才算活跃会话
@@ -337,23 +344,29 @@ export class LocalLogService {
           // ★ 工作区过滤：只搜索匹配当前工作区的目录
           if (projectFilter) {
             const dirName = path.basename(projectDir);
-            if (dirName !== projectFilter) {
+            if (dirName.toLowerCase() !== projectFilter.toLowerCase()) {
               continue;
             }
+            logger.log('[LocalLogService] 匹配目录:', dirName);
           }
 
           const jsonlFiles = this.getJsonlFiles(projectDir);
+          logger.log('[LocalLogService] 目录下 jsonl 文件数:', jsonlFiles.length);
+
           for (const file of jsonlFiles) {
             try {
               const stat = fs.statSync(file);
+              const ageMin = (now - stat.mtimeMs) / 60000;
               // ★ 跳过超过 5 分钟没更新的旧会话文件
               if (now - stat.mtimeMs > STALE_THRESHOLD) {
+                logger.log('[LocalLogService] 跳过过期文件:', path.basename(file).substring(0, 8), '(' + ageMin.toFixed(1) + '分钟前)');
                 continue;
               }
               const activeTime = Math.max(stat.birthtimeMs || 0, stat.mtimeMs || 0);
               if (activeTime > latestActiveTime) {
                 latestActiveTime = activeTime;
                 activeFile = file;
+                logger.log('[LocalLogService] 找到活跃文件:', path.basename(file).substring(0, 8), '(' + ageMin.toFixed(1) + '分钟前)');
               }
             } catch {
               // ignore
@@ -363,7 +376,7 @@ export class LocalLogService {
       }
 
       if (!activeFile) {
-        console.log(`[LocalLogService] 未找到会话文件 (projectFilter=${projectFilter || 'none'})`);
+        logger.warn('[LocalLogService] 未找到会话文件 (projectFilter=' + (projectFilter || 'none') + ')');
         return null;
       }
 
@@ -372,7 +385,7 @@ export class LocalLogService {
 
       // 检测会话切换：sessionId 变化时清空缓存
       if (this.lastSessionId !== sessionId) {
-        console.log(`[LocalLogService] 检测到会话切换: ${this.lastSessionId?.substring(0,8) || '(none)'} -> ${sessionId.substring(0,8)}...`);
+        logger.log('[LocalLogService] 检测到会话切换:', this.lastSessionId?.substring(0,8) || '(none)', '->', sessionId.substring(0,8));
         this.lastSessionId = sessionId;
         this.lastContextCache = null;
       }
@@ -400,16 +413,16 @@ export class LocalLogService {
         };
 
         if (wasCompacted) {
-          console.log(`[LocalLogService] 检测到 compact 事件: sessionId=${sessionId.substring(0,8)}... tokens=${latestEntry.inputTokens}`);
+          logger.log('[LocalLogService] 检测到 compact 事件:', { sessionId: sessionId.substring(0,8), tokens: latestEntry.inputTokens });
           return { ...this.lastContextCache, compacted: true };
         }
 
-        console.log(`[LocalLogService] 上下文更新: sessionId=${sessionId.substring(0,8)}... tokens=${latestEntry.inputTokens}`);
+        logger.log('[LocalLogService] 上下文更新:', { sessionId: sessionId.substring(0,8), tokens: latestEntry.inputTokens });
         return this.lastContextCache;
       }
 
       // ★ 新会话还没有数据时，返回初始上下文（tokens=0）
-      console.log(`[LocalLogService] 会话暂无数据，返回初始上下文: sessionId=${sessionId.substring(0,8)}...`);
+      logger.log('[LocalLogService] 会话暂无数据，返回初始上下文:', sessionId.substring(0,8));
       return {
         tokens: 0,
         project: projectName,
@@ -417,7 +430,7 @@ export class LocalLogService {
         sessionId
       };
     } catch (error) {
-      console.error('[LocalLogService] 获取当前会话上下文失败:', error);
+      logger.error('[LocalLogService] 获取当前会话上下文失败:', error);
     }
     return null;
   }
@@ -481,7 +494,7 @@ export class LocalLogService {
         }
       }
     } catch (error) {
-      console.error('解析 JSONL 文件失败:', filePath, error);
+      logger.error('解析 JSONL 文件失败:', filePath, error);
     }
 
     return { entries, lastCompactIndex };

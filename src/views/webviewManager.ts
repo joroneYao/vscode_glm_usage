@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { StorageService } from '../services/storageService';
 
-const WEBVIEW_VERSION = '1.0.7'; // 与 package.json 保持同步，用于检测版本更新
+const WEBVIEW_VERSION = '1.0.8'; // 与 package.json 保持同步，用于检测版本更新
 
 export class WebviewManager {
     private panel: vscode.WebviewPanel | undefined;

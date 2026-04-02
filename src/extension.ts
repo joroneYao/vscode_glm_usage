@@ -5,6 +5,7 @@ import axios from 'axios';
 import { ApiService } from './services/apiService';
 import { StorageService } from './services/storageService';
 import { WebviewManager } from './views/webviewManager';
+import { logger } from './services/logService';
 
 let apiService: ApiService;
 let storageService: StorageService;
@@ -15,7 +16,7 @@ let statusBarItem: vscode.StatusBarItem;
 let lastCtxPercent: number = 0; // 上下文占比缓存，同会话内只升不降
 let lastCtxSessionId: string = ''; // 追踪会话变化
 let refreshDebounceTimer: NodeJS.Timeout | undefined; // 防抖定时器
-const EXTENSION_VERSION = '1.0.7'; // 与 package.json 保持同步
+const EXTENSION_VERSION = '1.0.8'; // 与 package.json 保持同步
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24小时检查一次更新
 
 /**
@@ -66,6 +67,15 @@ async function checkForUpdates(context: vscode.ExtensionContext): Promise<void> 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('Claude/GLM 用量统计插件已激活');
 
+  // ★ 读取调试模式配置，决定是否启用日志文件输出
+  const config = vscode.workspace.getConfiguration('stats');
+  logger.init(config.get<boolean>('debugMode', false));
+
+  logger.log('=== 扩展激活 ===');
+  logger.log('扩展版本:', EXTENSION_VERSION);
+  logger.log('扩展路径:', context.extensionPath);
+  logger.log('工作区:', vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || '无');
+
   // 初始化服务
   storageService = new StorageService(context);
   apiService = new ApiService(context);
@@ -74,10 +84,12 @@ export async function activate(context: vscode.ExtensionContext) {
   // ★ 设置当前工作区过滤（隔离多窗口数据）
   // 如果没有工作区，使用扩展路径作为回退（F5 调试场景）
   apiService.setProjectFilter(vscode.workspace.workspaceFolders, context.extensionPath);
+  logger.log('projectFilter 已设置:', apiService.getProjectFilter());
 
   // ★ 监听工作区变化，更新过滤
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      logger.log('工作区变化，更新 projectFilter');
       apiService.setProjectFilter(vscode.workspace.workspaceFolders, context.extensionPath);
       apiService.clearSessionContextCache();
     })
@@ -90,31 +102,51 @@ export async function activate(context: vscode.ExtensionContext) {
   statusBarItem.tooltip = '点击查看 GLM 用量详情';
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
-
-
+  logger.log('[Extension] 状态栏已创建');
 
   // 注册命令
-  registerCommands(context);
+  try {
+    registerCommands(context);
+    logger.log('[Extension] 命令已注册');
+  } catch (error) {
+    logger.error('[Extension] registerCommands 失败:', error);
+  }
 
   // 启动自动刷新
-  setupAutoRefresh(context);
+  try {
+    setupAutoRefresh(context);
+    logger.log('[Extension] 自动刷新已设置');
+  } catch (error) {
+    logger.error('[Extension] setupAutoRefresh 失败:', error);
+  }
 
   // ★ 启动文件监听器（实时监听会话变化）
-  setupFileWatcher(context);
+  try {
+    setupFileWatcher(context);
+  } catch (error) {
+    logger.error('[Extension] setupFileWatcher 失败:', error);
+  }
 
   // ★ 首次加载数据（非阻塞： 后台执行，不等待完成）
   // 避免文件遍历阻塞扩展激活
-    const loadInitialData = async () => {
-    console.log('[Extension] 开始首次加载用量数据（后台执行）...');
+  const loadInitialData = async () => {
+    logger.log('[Extension] 开始首次加载用量数据（后台执行）...');
     try {
       const freshStats = await apiService.getUsageStats();
+      logger.log('[Extension] getUsageStats 返回:', {
+        dataSource: freshStats.dataSource,
+        hasApiKey: freshStats.hasApiKey,
+        todayTokens: freshStats.localLogData?.todayTokens,
+        ctxTokens: freshStats.localLogData?.chatContext?.tokens,
+        ctxSessionId: freshStats.localLogData?.chatContext?.sessionId?.substring(0, 8)
+      });
       await storageService.saveUsageStats(freshStats);
       // 更新状态栏显示用量概要
       const stats = storageService.getUsageStats();
       updateStatusBarView(stats);
-      console.log('[Extension] 首次加载完成');
+      logger.log('[Extension] 首次加载完成');
     } catch (error) {
-      console.error('[Extension] 首次加载数据失败:', error);
+      logger.error('[Extension] 首次加载数据失败:', error);
       statusBarItem.text = '$(graph) GLM 用量';
     }
   };
@@ -255,6 +287,16 @@ function registerCommands(context: vscode.ExtensionContext) {
       webviewManager.show();
     })
   );
+
+  // 打开日志文件（调试用）
+  context.subscriptions.push(
+    vscode.commands.registerCommand('stats.openLogFile', () => {
+      const logPath = logger.getLogFilePath();
+      vscode.window.showInformationMessage(`日志文件: ${logPath}`);
+      vscode.env.clipboard.writeText(logPath);
+      vscode.window.showInformationMessage('日志路径已复制到剪贴板');
+    })
+  );
 }
 
 function setupAutoRefresh(context: vscode.ExtensionContext) {
@@ -305,10 +347,11 @@ function setupAutoRefresh(context: vscode.ExtensionContext) {
  */
 function setupFileWatcher(context: vscode.ExtensionContext) {
   const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
+  logger.log('[FileWatcher] 设置文件监听器, 监听目录:', claudeProjectsDir);
 
   // 检查目录是否存在
   if (!require('fs').existsSync(claudeProjectsDir)) {
-    console.log('[Extension] Claude projects 目录不存在，跳过文件监听');
+    logger.warn('[FileWatcher] Claude projects 目录不存在，跳过文件监听');
     return;
   }
 
@@ -316,6 +359,7 @@ function setupFileWatcher(context: vscode.ExtensionContext) {
   fileWatcher = vscode.workspace.createFileSystemWatcher(
     new vscode.RelativePattern(vscode.Uri.file(claudeProjectsDir), '**/*.jsonl')
   );
+  logger.log('[FileWatcher] 文件监听器已创建');
 
   /**
    * 将路径编码为 Claude 项目目录名格式
@@ -345,11 +389,11 @@ function setupFileWatcher(context: vscode.ExtensionContext) {
     } else if (context.extensionPath) {
       // F5 调试场景：使用扩展路径作为回退
       projectPaths = [context.extensionPath];
-      console.log(`[Extension] 无工作区，使用扩展路径作为回退: ${context.extensionPath}`);
+      logger.log('[FileWatcher] 无工作区，使用扩展路径作为回退:', context.extensionPath);
     }
 
     if (projectPaths.length === 0) {
-      console.log(`[Extension] 无法确定项目路径，忽略文件变化`);
+      logger.warn('[FileWatcher] 无法确定项目路径，忽略文件变化');
       return false;
     }
 
@@ -357,7 +401,7 @@ function setupFileWatcher(context: vscode.ExtensionContext) {
     // filePath: ~/.claude/projects/e--AISpace-vscode-glm-usage/sessionId.jsonl
     const match = filePath.match(/\.claude[\\\/]projects[\\\/]([^\\\/]+)[\\\/]/);
     if (!match) {
-      console.log(`[Extension] 无法解析文件路径: ${filePath}`);
+      logger.warn('[FileWatcher] 无法解析文件路径:', filePath);
       return false;
     }
     const fileProjectDir = match[1];
@@ -365,28 +409,30 @@ function setupFileWatcher(context: vscode.ExtensionContext) {
     // 检查是否有任一项目路径匹配
     for (const projectPath of projectPaths) {
       const workspaceProjectDir = encodeToProjectDirName(projectPath);
-      console.log(`[Extension] 匹配检查: fileDir=${fileProjectDir}, projectDir=${workspaceProjectDir}`);
-      if (fileProjectDir === workspaceProjectDir) {
+      logger.log('[FileWatcher] 匹配检查:', { fileProjectDir, workspaceProjectDir, match: fileProjectDir.toLowerCase() === workspaceProjectDir.toLowerCase() });
+      if (fileProjectDir.toLowerCase() === workspaceProjectDir.toLowerCase()) {
+        logger.log('[FileWatcher] 匹配成功!');
         return true;
       }
     }
 
-    console.log(`[Extension] 文件不匹配任何项目，将被过滤`);
+    logger.warn('[FileWatcher] 文件不匹配任何项目，将被过滤');
     return false;
   };
 
   // 处理会话文件变化/创建 - 跟随最后活跃的会话
   const handleSessionFileEvent = async (uri: vscode.Uri, eventType: string) => {
     const filePath = uri.fsPath;
-    console.log(`[Extension] 检测到会话文件${eventType}: ${path.basename(filePath)}`);
+    logger.log('[FileWatcher] 检测到会话文件' + eventType + ':', path.basename(filePath));
 
     if (!isFileInCurrentWorkspace(filePath)) {
-      console.log(`[Extension] 文件不属于当前工作区，跳过`);
+      logger.log('[FileWatcher] 文件不属于当前工作区，跳过');
       return;
     }
 
     // ★ 跟随最后活跃：设置为当前活跃会话
     apiService.setActiveSessionFile(filePath);
+    logger.log('[FileWatcher] 已设置活跃会话文件');
 
     // 使用防抖避免频繁刷新
     if (refreshDebounceTimer) {
@@ -398,9 +444,9 @@ function setupFileWatcher(context: vscode.ExtensionContext) {
         await storageService.saveUsageStats(stats);
         updateStatusBarView(stats);
         webviewManager.updatePanel();
-        console.log(`[Extension] 文件${eventType}触发刷新完成`);
+        logger.log('[FileWatcher] 文件' + eventType + '触发刷新完成');
       } catch (error) {
-        console.error(`[Extension] 文件${eventType}刷新失败:`, error);
+        logger.error('[FileWatcher] 文件' + eventType + '刷新失败:', error);
       }
     }, 500);
   };
@@ -416,7 +462,7 @@ function setupFileWatcher(context: vscode.ExtensionContext) {
   });
 
   context.subscriptions.push(fileWatcher);
-  console.log('[Extension] 文件监听器已启动');
+  logger.log('[FileWatcher] 文件监听器已启动');
 }
 
 export function deactivate() {

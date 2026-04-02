@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { LocalLogService, AggregatedUsage } from './localLogService';
+import { logger } from './logService';
 
 export interface ModelUsage {
   role: string;
@@ -88,21 +89,24 @@ export class ApiService {
    * @param fallbackPath 回退路径（F5 调试场景下使用扩展路径）
    */
   setProjectFilter(workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined, fallbackPath?: string): void {
-    console.log(`[ApiService] setProjectFilter 被调用, workspaceFolders=${workspaceFolders ? workspaceFolders.length : 'undefined'}, fallbackPath=${fallbackPath || 'none'}`);
+    logger.log('[ApiService] setProjectFilter 被调用', {
+      workspaceFolders: workspaceFolders ? workspaceFolders.length : 'undefined',
+      fallbackPath: fallbackPath || 'none'
+    });
 
     let folderPath: string | undefined;
 
     if (workspaceFolders && workspaceFolders.length > 0) {
       folderPath = workspaceFolders[0].uri.fsPath;
-      console.log(`[ApiService] 使用工作区路径: ${folderPath}`);
+      logger.log('[ApiService] 使用工作区路径:', folderPath);
     } else if (fallbackPath) {
       folderPath = fallbackPath;
-      console.log(`[ApiService] 使用回退路径(扩展路径): ${folderPath}`);
+      logger.log('[ApiService] 使用回退路径(扩展路径):', folderPath);
     }
 
     if (!folderPath) {
       this.projectFilter = null;
-      console.log(`[ApiService] projectFilter 设置为 null (无工作区且无回退)`);
+      logger.warn('[ApiService] projectFilter 设置为 null (无工作区且无回退)');
       return;
     }
 
@@ -113,7 +117,7 @@ export class ApiService {
     // 路径分隔符和下划线 → -
     normalized = normalized.replace(/[_\/]/g, '-');
     this.projectFilter = normalized;
-    console.log(`[ApiService] 设置项目过滤: ${this.projectFilter}`);
+    logger.log('[ApiService] 设置项目过滤:', this.projectFilter);
   }
 
   /**
@@ -128,6 +132,13 @@ export class ApiService {
    */
   clearSessionContextCache(): void {
     this.localLogService.clearContextCache();
+  }
+
+  /**
+   * 获取当前项目过滤值（供日志调试）
+   */
+  getProjectFilter(): string | null {
+    return this.projectFilter;
   }
 
   /**
@@ -149,10 +160,10 @@ export class ApiService {
         const content = fs.readFileSync(settingsPath, 'utf8');
         return JSON.parse(content);
       } else {
-        console.warn(`Claude 设置文件不存在: ${settingsPath}`);
+        logger.warn('Claude 设置文件不存在:', settingsPath);
       }
     } catch (error) {
-      console.error('读取 Claude 设置失败:', error);
+      logger.error('读取 Claude 设置失败:', error);
     }
     return {};
   }
@@ -246,7 +257,7 @@ export class ApiService {
       });
 
       if (response.status === 200 && response.data) {
-        console.log('[ApiService] GLM Billing API 查询/刷新成功');
+        logger.log('[ApiService] GLM Billing API 查询/刷新成功');
         this.lastBillingData = response.data;
         this.lastBillingTime = Date.now();
 
@@ -255,7 +266,7 @@ export class ApiService {
     } catch (error: any) {
       const status = error.response?.status;
       const msg = error.response?.data?.msg || error.message;
-      console.warn(`[ApiService] GLM Billing API 调用失败 (${status}): ${msg}`);
+      logger.warn('[ApiService] GLM Billing API 调用失败:', status, msg);
     }
 
     return null;
@@ -325,10 +336,10 @@ export class ApiService {
       };
       this.lastTrendData = result;
       this.lastTrendTime = Date.now();
-      console.log('[ApiService] GLM model-usage 趋势数据获取成功');
+      logger.log('[ApiService] GLM model-usage 趋势数据获取成功');
       return result;
     } catch (err: any) {
-      console.warn('[ApiService] GLM model-usage 趋势获取失败:', err.message);
+      logger.warn('[ApiService] GLM model-usage 趋势获取失败:', err.message);
       return null;
     }
   }
@@ -403,14 +414,29 @@ export class ApiService {
    */
   private async getLocalLogUsageData(): Promise<UsageStats['localLogData'] | null> {
     if (!this.localLogService.isAvailable()) {
+      logger.warn('[ApiService] localLogService 不可用');
       return null;
     }
 
     try {
+      logger.log('[ApiService] 开始获取本地日志数据, projectFilter:', this.projectFilter || 'none');
+
       const [allUsage, currentContext] = await Promise.all([
         this.localLogService.getUsage(undefined, this.projectFilter || undefined),
         this.localLogService.getCurrentSessionContext(this.projectFilter || undefined)
       ]);
+
+      logger.log('[ApiService] getUsage 结果:', {
+        totalInputTokens: allUsage.totalInputTokens,
+        totalOutputTokens: allUsage.totalOutputTokens,
+        entriesCount: allUsage.entries?.length || 0
+      });
+
+      logger.log('[ApiService] getCurrentSessionContext 结果:', currentContext ? {
+        tokens: currentContext.tokens,
+        sessionId: currentContext.sessionId?.substring(0, 8),
+        project: currentContext.project
+      } : 'null');
 
       const byProject: any[] = [];
       allUsage.byProject.forEach((data, project) => {
@@ -434,7 +460,7 @@ export class ApiService {
         } : undefined
       };
     } catch (error) {
-      console.error('本地日志解析失败:', error);
+      logger.error('[ApiService] 本地日志解析失败:', error);
       return null;
     }
   }
@@ -471,7 +497,7 @@ export class ApiService {
             level: parsed.level,
             limits: parsed.rawLimits
           };
-          console.log('[ApiService] 使用 Billing API 数据');
+          logger.log('[ApiService] 使用 Billing API 数据');
         }
       }
     }
@@ -481,7 +507,7 @@ export class ApiService {
 
     // ★ 关键日志：输出上下文数据详情
     if (localLogData?.chatContext) {
-      console.log(`[ApiService] 上下文数据: sessionId=${localLogData.chatContext.sessionId?.substring(0,8)}... tokens=${localLogData.chatContext.tokens}`);
+      logger.log('[ApiService] 上下文数据:', { sessionId: localLogData.chatContext.sessionId?.substring(0,8), tokens: localLogData.chatContext.tokens });
     }
 
     // 生成模型列表

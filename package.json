@@ -2,7 +2,7 @@
   "name": "claude-glm-usage-stats",
   "displayName": "GLM 用量统计 (GLM Usage Tracker)",
   "description": "专为使用智谱 GLM Coding Plan 与 Claude Code 打造的自动用量跟踪可视化面板，准确掌握 Token 流水与 MCP 工具配额的侧边栏管家。",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "publisher": "Jorone",
   "engines": {
     "vscode": "^1.80.0"
@@ -67,6 +67,11 @@
           "type": "boolean",
           "default": true,
           "description": "启用自动刷新"
+        },
+        "stats.debugMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "调试模式：启用日志文件输出（日志位于 ~/.claude/extension-logs/）"
         }
       }
     }
